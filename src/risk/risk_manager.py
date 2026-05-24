@@ -108,6 +108,33 @@ class RiskManager:
                 rejected.append((intent, "symbol_cooldown"))
                 continue
 
+            # CLOSE is risk-reducing — never blocked by missing mid, funding,
+            # per-symbol cap, or liq distance. Resolve a fill price from
+            # (current mid → intent.reference_mid → position entry_price); if
+            # none are available, reject with a distinct reason.
+            if intent.action == "CLOSE":
+                mid = mids.get(intent.symbol, 0.0)
+                fallback = None
+                if mid <= 0:
+                    if intent.reference_mid > 0:
+                        mid, fallback = intent.reference_mid, "reference_mid"
+                    else:
+                        pos = account.positions.get(intent.symbol)
+                        if pos and pos.entry_price > 0:
+                            mid, fallback = pos.entry_price, "entry_price"
+                        else:
+                            rejected.append((intent, "no_close_price"))
+                            continue
+                    log.warning("closing without current mid", extra={
+                        "symbol": intent.symbol, "fallback_source": fallback,
+                        "fallback_px": mid,
+                    })
+                # Ensure the dry-run engine fills at the resolved price.
+                intent.reference_mid = mid
+                sim_positions[intent.symbol] = 0.0
+                accepted.append(intent)
+                continue
+
             mid = mids.get(intent.symbol, 0.0)
             if mid <= 0:
                 rejected.append((intent, "no_mid"))
