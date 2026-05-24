@@ -62,9 +62,13 @@ class AccountState:
             realized_pnl_today=float(d.get("realized_pnl_today", 0.0)),
         )
         for sym, pd in (d.get("positions") or {}).items():
+            size = float(pd.get("size", 0.0))
+            # Drop zero / near-zero residuals on load so reporting stays clean.
+            if abs(size) < 1e-12:
+                continue
             st.positions[sym] = Position(
                 symbol=sym,
-                size=float(pd.get("size", 0.0)),
+                size=size,
                 entry_price=float(pd.get("entry_price", 0.0)),
                 notional_at_entry=float(pd.get("notional_at_entry", 0.0)),
             )

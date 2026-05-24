@@ -8,6 +8,10 @@ from .order_intent import OrderIntent
 
 log = get(__name__)
 
+# Anything smaller than this in absolute size is treated as fully closed.
+# Guards against float-add noise on partial fills that should net to zero.
+ZERO_SIZE_EPS = 1e-12
+
 
 @dataclass
 class DryRunConfig:
@@ -60,26 +64,30 @@ class DryRunEngine:
                 direction = 1.0 if prior_size > 0 else -1.0
                 realized = closed * direction * (fill_price - prior_entry)
 
-            if new_size == 0.0:
+            if abs(new_size) < ZERO_SIZE_EPS:
+                # Fully closed (or near-zero residual from float arithmetic).
+                # Remove the entry entirely so reporting/position counts stay clean.
+                account.positions.pop(intent.symbol, None)
                 pos.size = 0.0
                 pos.entry_price = 0.0
                 pos.notional_at_entry = 0.0
-            elif prior_size == 0.0 or (prior_size > 0) != (new_size > 0):
-                # opened fresh or flipped → new entry is fill price
-                pos.size = new_size
-                pos.entry_price = fill_price
-                pos.notional_at_entry = abs(new_size) * fill_price
-            elif abs(new_size) > abs(prior_size):
-                # weighted-average entry on add
-                added = abs(intent.delta_size)
-                pos.entry_price = (abs(prior_size) * prior_entry + added * fill_price) / abs(new_size)
-                pos.size = new_size
-                pos.notional_at_entry = abs(new_size) * pos.entry_price
             else:
-                # partial reduction; keep entry
-                pos.size = new_size
+                if prior_size == 0.0 or (prior_size > 0) != (new_size > 0):
+                    # opened fresh or flipped → new entry is fill price
+                    pos.size = new_size
+                    pos.entry_price = fill_price
+                    pos.notional_at_entry = abs(new_size) * fill_price
+                elif abs(new_size) > abs(prior_size):
+                    # weighted-average entry on add
+                    added = abs(intent.delta_size)
+                    pos.entry_price = (abs(prior_size) * prior_entry + added * fill_price) / abs(new_size)
+                    pos.size = new_size
+                    pos.notional_at_entry = abs(new_size) * pos.entry_price
+                else:
+                    # partial reduction; keep entry
+                    pos.size = new_size
+                account.positions[intent.symbol] = pos
 
-            account.positions[intent.symbol] = pos
             account.equity_usdc += realized - fee
             account.realized_pnl_today += realized - fee
 

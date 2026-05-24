@@ -22,6 +22,46 @@ def test_open_long_then_close_realizes_pnl():
         delta_size=-0.02, reference_mid=55000.0,
     )
     fills = eng.simulate([close_intent], acct)
-    assert acct.positions["BTC"].size == 0.0
+    # Fully closed → symbol must be removed from positions dict.
+    assert "BTC" not in acct.positions, \
+        f"closed symbol should be pruned; still present as {acct.positions.get('BTC')}"
     assert fills[0].realized_pnl == 0.02 * (55000.0 - 50000.0)
     assert acct.realized_pnl_today == 0.02 * (55000.0 - 50000.0)
+    assert fills[0].new_size == 0.0
+
+
+def test_load_state_drops_zero_size_residuals():
+    from src.portfolio.account_state import AccountState
+    raw = {
+        "equity_usdc": 1000.0,
+        "day_start_equity_usdc": 1000.0,
+        "realized_pnl_today": 0.0,
+        "positions": {
+            "REAL": {"size": 1.5, "entry_price": 100.0, "notional_at_entry": 150.0},
+            "STALE_ZERO": {"size": 0.0, "entry_price": 0.0, "notional_at_entry": 0.0},
+            "STALE_TINY": {"size": 1e-15, "entry_price": 0.0, "notional_at_entry": 0.0},
+        },
+    }
+    acct = AccountState.from_dict(raw)
+    assert set(acct.positions.keys()) == {"REAL"}
+
+
+def test_partial_reduction_keeps_position():
+    from src.execution.dry_run_engine import DryRunConfig, DryRunEngine
+    from src.execution.order_intent import OrderIntent
+    from src.portfolio.account_state import AccountState
+
+    eng = DryRunEngine(DryRunConfig(slippage_bps=0.0, taker_bps=0.0))
+    acct = AccountState(equity_usdc=10000.0, day_start_equity_usdc=10000.0)
+    eng.simulate([OrderIntent(
+        symbol="ETH", side="LONG", action="OPEN",
+        target_notional_usdc=2000.0, target_size=1.0, current_size=0.0,
+        delta_size=1.0, reference_mid=2000.0,
+    )], acct)
+    eng.simulate([OrderIntent(
+        symbol="ETH", side="SHORT", action="REDUCE",
+        target_notional_usdc=1000.0, target_size=0.5, current_size=1.0,
+        delta_size=-0.5, reference_mid=2200.0,
+    )], acct)
+    # Half-closed → still present.
+    assert "ETH" in acct.positions and acct.positions["ETH"].size == 0.5

@@ -171,6 +171,11 @@ def main() -> None:
     assert "EEE" not in syms and "JJJ" not in syms
     assert "KKK" in syms and "LLL" in syms
     assert len(syms) == 10
+    # Closed symbols must be PRUNED from the dict (not left as size=0 residuals).
+    assert "EEE" not in account.positions, "closed long EEE must be pruned"
+    assert "JJJ" not in account.positions, "closed short JJJ must be pruned"
+    assert len(account.positions) == 10, \
+        f"positions dict must equal active count (got {len(account.positions)})"
 
     # ---- Scenario E: side flip - AAA flips LONG -> SHORT, FFF flips SHORT -> LONG
     flip_scores = (
@@ -191,6 +196,8 @@ def main() -> None:
     aaa = account.positions["AAA"]; fff = account.positions["FFF"]
     assert aaa.size < 0, f"AAA should be SHORT after flip, got size={aaa.size}"
     assert fff.size > 0, f"FFF should be LONG after flip, got size={fff.size}"
+    assert len(account.positions) == 10, \
+        f"flip must not leave residuals (got {len(account.positions)} entries)"
 
     # ---- Coherence summary
     print("\n========== COHERENCE ==========")
