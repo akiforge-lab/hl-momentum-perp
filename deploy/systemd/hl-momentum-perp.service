@@ -1,0 +1,24 @@
+[Unit]
+Description=Hyperliquid Momentum Perp (dry-run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/home/openclaw/workspace/hl-momentum-perp
+EnvironmentFile=/home/openclaw/workspace/hl-momentum-perp/.env
+ExecStart=/home/openclaw/workspace/hl-momentum-perp/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/openclaw/workspace/hl-momentum-perp/logs /home/openclaw/workspace/hl-momentum-perp/state /home/openclaw/workspace/hl-momentum-perp/data
+
+[Install]
+WantedBy=multi-user.target

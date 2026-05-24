@@ -1,0 +1,33 @@
+# systemd --user unit template (no root, no global state).
+#
+# Install (per-user, NOT yet enabled):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/user/hl-momentum-perp.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#
+# Then, only when you are ready:
+#   systemctl --user start  hl-momentum-perp
+#   systemctl --user enable hl-momentum-perp     # start at login
+#   loginctl enable-linger openclaw              # start at boot without login
+#
+# Logs:  journalctl --user -u hl-momentum-perp -f
+#
+# IMPORTANT: this runs dry-run only. v1 has no live-execution path.
+
+[Unit]
+Description=Hyperliquid Momentum Perp (dry-run, user service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/hl-momentum-perp
+EnvironmentFile=%h/workspace/hl-momentum-perp/.env
+ExecStart=%h/workspace/hl-momentum-perp/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

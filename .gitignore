@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime dirs at repo root only (don't shadow src/state, etc.)
+/data/
+/logs/
+/state/
+*.log
+*.jsonl
+
+*.key
+*.pem
+secrets/
+
+# Host-specific wrappers (keep templates *.example.sh tracked)
+*.local.sh
+run.local.sh
+dryrun.local.sh
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

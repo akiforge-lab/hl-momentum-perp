@@ -1,0 +1,3 @@
+# Daily PnL/exposure summary at 00:05 UTC
+# Copy into the openclaw user's crontab: `crontab -e`
+5 0 * * * cd /home/openclaw/workspace/hl-momentum-perp && /home/openclaw/workspace/hl-momentum-perp/.venv/bin/python -m simulation.daily_report >> logs/daily_report.log 2>&1

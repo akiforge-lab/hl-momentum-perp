@@ -1,0 +1,85 @@
+# ============================================================
+# Hyperliquid Momentum Perp — configuration
+# v1 is DRY-RUN ONLY. See README.md "Safety model".
+# ============================================================
+
+execution:
+  mode: dry_run          # only accepted value in v1; anything else aborts startup
+  allow_live: false      # hard-gated second flag; v1 ignores even if true
+  assumed_slippage_bps: 2.0
+  assumed_taker_bps: 4.5
+  assumed_maker_bps: 1.5
+
+dry_run:
+  starting_equity_usdc: 10000.0
+  use_account_equity_if_available: true   # if HL_ACCOUNT_ADDRESS set, seed equity from Info
+
+loop:
+  rebalance_interval_sec: 3600     # daily-momentum strategy → hourly rebalance is plenty
+  market_data_refresh_sec: 300
+  state_save_interval_sec: 30
+
+universe:
+  auto_discover: true              # pull all perps from HL meta
+  include: []                      # if non-empty, restricts to this list
+  exclude: []
+  min_24h_notional_usdc: 1000000   # liquidity floor
+  min_bars: 100                    # require at least N daily candles
+  stale_max_sec: 7200              # reject if last candle older than this
+  candle_interval: "1d"
+  candle_lookback: 220             # bars fetched per symbol
+
+candle_cache:
+  enabled: true
+  dir: "data/candles"
+  ttl_sec: 21600                   # 6h — daily bars; refresh ~4x/day
+  fetch_concurrency: 4             # cap on simultaneous /info calls
+
+signal:
+  type: ols_momentum
+  regression_window: 90            # bars used for slope/R^2 fit
+  min_r2: 0.30
+  score_floor_abs: 50.0            # |slope_ann_pct * r2| floor to enter sleeve
+  r2_weight_in_score: true         # momentum_score = slope_ann_pct * r2 (matches scanner)
+
+basket:
+  mode: independent                # "independent" | "paired"
+  longs_k: 5                       # top-K longs
+  shorts_k: 5                      # bottom-K shorts
+  weighting: equal                 # "equal" | "score" (score → later)
+  rebalance_drift_pct: 25.0        # only adjust a position if it drifts > this % from target
+
+portfolio:
+  target_leverage: 1.0             # start at 1x cross; raise toward 10x after dry-run validation
+  max_leverage: 2.0
+  max_gross_x_equity: 2.0
+  max_net_abs_x_equity: 0.30       # |net| ≤ 30% of equity → keep market-neutralish
+  max_per_symbol_pct_of_equity: 15.0
+
+risk:
+  global_kill_switch: false
+  kill_file_path: "state/KILL"     # touch this file to halt
+  stale_data_sec: 900              # reject quoting if data older than this
+  min_liq_distance_pct: 25.0       # post-trade distance-to-liq floor
+  max_daily_loss_pct: 3.0          # of day-start equity
+  stop_loss_cooldown_min: 60
+  daily_loss_cooldown_min: 1440
+  funding_skip_abs_bps_per_hr: 8.0 # skip same-side entries when funding is strongly adverse
+  daily_reset_utc_hour: 0
+
+notify:
+  telegram:
+    enabled: true
+    severities: [proposal, risk_reject, kill, daily, error]
+    rate_limit_sec: 2.0
+  openclaw:
+    enabled: false
+
+logging:
+  level: INFO
+  json: true
+  decisions_path: "logs/decisions.jsonl"
+  app_log_path: "logs/app.log"
+
+state:
+  path: "state/state.json"
