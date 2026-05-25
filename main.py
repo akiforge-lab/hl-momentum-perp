@@ -21,6 +21,7 @@ from src.exchange.candle_cache import CandleCache
 from src.exchange.hl_info_client import HLInfoClient
 from src.execution.dry_run_engine import DryRunConfig, DryRunEngine
 from src.execution.intent_builder import diff_to_intents
+from src.notify.operator import Operator, OperatorConfig
 from src.notify.telegram import TelegramNotifier
 from src.portfolio.account_state import AccountState
 from src.portfolio.basket import build_basket, scale_basket_to_caps
@@ -106,7 +107,7 @@ async def fetch_candle_map(
 async def one_cycle(
     cfg: dict, info: HLInfoClient, account: AccountState, risk: RiskManager,
     dry_engine: DryRunEngine, notifier: TelegramNotifier, jsonl: JsonlLog,
-    store: StateStore, candle_cache: CandleCache | None,
+    store: StateStore, candle_cache: CandleCache | None, operator: Operator,
 ) -> None:
     t0 = time.time()
     # Single fetch per cycle for global market data (meta + per-asset context).
@@ -200,24 +201,33 @@ async def one_cycle(
     for f in fills:
         jsonl.append("dry_fill", f.__dict__)
 
-    risk.check_daily_loss(account, mids)
+    if risk.check_daily_loss(account, mids):
+        await operator.kill("daily loss limit hit")
+
     store.save(account=account, extra={"cooldown_until_ts": risk.cooldown_until_ts})
 
-    # Telegram summary
-    if decision.accepted or decision.rejected:
-        lines = [f"*hl-momentum-perp* dry-run cycle"]
-        lines.append(f"equity: `{account.equity_usdc:.2f}` USDC | "
-                     f"day_pnl: `{account.realized_pnl_today:+.2f}`")
-        lines.append(f"longs picked: {len([t for t in targets if t.side=='LONG'])}, "
-                     f"shorts picked: {len([t for t in targets if t.side=='SHORT'])}")
-        for t in targets[:10]:
-            lines.append(f"  {t.side:<5} `{t.symbol}` ${t.notional_usdc:,.0f} "
-                         f"(score {t.score:+.1f})")
-        if decision.rejected:
-            lines.append(f"_rejected:_ {len(decision.rejected)}")
-            for it, r in decision.rejected[:5]:
-                lines.append(f"  ✗ {it.side} {it.symbol} — {r}")
-        await notifier.send("proposal", "\n".join(lines))
+    # ---- operator notifications -----------------------------------------
+    # rotation (only if any OPEN/CLOSE/FLIP fills happened — INCREASE/REDUCE are routine)
+    await operator.rotation(fills, equity=account.equity_usdc,
+                            day_pnl=account.realized_pnl_today)
+    # risk rejects (aggregated, dedup'd; also feeds the repeated-loop detector)
+    await operator.rejects(decision.rejected)
+    # abnormal-condition warnings
+    await operator.warn_degraded_universe(
+        longs_avail=len(longs), shorts_avail=len(shorts),
+        longs_k=int(b_cfg["longs_k"]), shorts_k=int(b_cfg["shorts_k"]),
+    )
+    await operator.warn_stale_candles(fresh_dropped=fresh_dropped)
+    await operator.warn_gross_drift(
+        gross=account.gross_notional(mids),
+        equity=max(account.equity_usdc, 1e-9),
+        target_lev=float(p_cfg["target_leverage"]),
+    )
+    expected_pos = len([t for t in targets if t.notional_usdc > 0])
+    await operator.warn_position_mismatch(expected=expected_pos,
+                                          actual=len(account.positions))
+    missing_mids = [t.symbol for t in targets if mids.get(t.symbol, 0.0) <= 0]
+    await operator.warn_missing_mids(missing=missing_mids)
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -268,6 +278,14 @@ async def run(args: argparse.Namespace) -> None:
         severities=cfg["notify"]["telegram"]["severities"],
         rate_limit_sec=float(cfg["notify"]["telegram"]["rate_limit_sec"]),
     )
+    op_cfg = (cfg["notify"].get("operator") or {})
+    operator = Operator(notifier, OperatorConfig(
+        dedup_window_sec=int(op_cfg.get("dedup_window_sec", 3600)),
+        gross_drift_warn_pct=float(op_cfg.get("gross_drift_warn_pct", 25.0)),
+        stale_candles_warn=int(op_cfg.get("stale_candles_warn", 5)),
+        repeated_reject_cycles=int(op_cfg.get("repeated_reject_cycles", 3)),
+        repeated_reject_window=int(op_cfg.get("repeated_reject_window", 5)),
+    ))
 
     store = StateStore(cfg["state"]["path"])
     saved = store.load()
@@ -304,18 +322,27 @@ async def run(args: argparse.Namespace) -> None:
             except Exception as e:
                 log.warning("could not read on-chain equity", extra={"err": repr(e)})
 
+        # startup announcement (always sent, regardless of dedup)
+        await operator.startup(
+            mode=cfg["execution"]["mode"],
+            target_leverage=float(cfg["portfolio"]["target_leverage"]),
+            max_leverage=float(cfg["portfolio"]["max_leverage"]),
+            longs_k=int(cfg["basket"]["longs_k"]),
+            shorts_k=int(cfg["basket"]["shorts_k"]),
+        )
+
         if args.once:
-            await one_cycle(cfg, info, account, risk, dry_engine, notifier, jsonl, store, candle_cache)
+            await one_cycle(cfg, info, account, risk, dry_engine, notifier, jsonl, store, candle_cache, operator)
             return
 
         interval = int(cfg["loop"]["rebalance_interval_sec"])
         reset_at = next_daily_reset(int(cfg["risk"]["daily_reset_utc_hour"]))
         while True:
             try:
-                await one_cycle(cfg, info, account, risk, dry_engine, notifier, jsonl, store, candle_cache)
+                await one_cycle(cfg, info, account, risk, dry_engine, notifier, jsonl, store, candle_cache, operator)
             except Exception as e:
                 log.exception("cycle error", extra={"err": repr(e)})
-                await notifier.send("error", f"cycle error: {e!r}")
+                await operator.error("one_cycle", repr(e))
             # daily reset
             if utcnow() >= reset_at:
                 account.day_start_equity_usdc = account.equity_usdc

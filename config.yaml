@@ -70,10 +70,16 @@ risk:
 notify:
   telegram:
     enabled: true
-    severities: [proposal, risk_reject, kill, daily, error]
+    severities: [startup, rotation, risk_reject, warning, error, kill]
     rate_limit_sec: 2.0
   openclaw:
     enabled: false
+  operator:
+    dedup_window_sec: 3600           # suppress identical warnings within this window
+    gross_drift_warn_pct: 25.0       # |effective_leverage - target_leverage| / target * 100 threshold
+    stale_candles_warn: 5            # warn if freshness drops this many symbols
+    repeated_reject_cycles: 3        # same (sym,reason) for N consecutive cycles -> warn
+    repeated_reject_window: 5
 
 logging:
   level: INFO
